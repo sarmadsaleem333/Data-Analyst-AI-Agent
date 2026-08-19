@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import base64
 from groq import Groq
 from src.tools import TOOLS
 
@@ -26,7 +27,9 @@ You have the following tools available:
 
 4. **USE REAL COMPUTATION**: For aggregations, filters, correlations, trends — use the execute_code or aggregate_segment_risk tools. Don't guess.
 
-5. **BE CONCISE**: Give direct answers. Only explain reasoning when asked.
+5. **GENERATE CHARTS**: When the user asks to "show", "visualize", "plot", or "chart" something, use the generate_chart tool. Always include a chart when it would help illustrate the answer.
+
+6. **BE CONCISE**: Give direct answers. Only explain reasoning when asked.
 
 ## HOW TO RESPOND
 
@@ -44,8 +47,31 @@ IMPORTANT:
 - For execute_code tool, the code should use 'df' (the dataset) and 'pd' (pandas). Assign result to a variable named 'result'.
 - For predict_hypothetical, pass a JSON string of customer data.
 - For aggregate_segment_risk, pass a JSON string of filter conditions.
+- For generate_chart, pass JSON like: {{"chart_type":"bar","x_col":"Contract","title":"Churn by Contract"}}
 - You can make ONE tool call at a time. Plan your next step after seeing each result.
 - Always verify numbers in your final answer came from actual tool results.
+"""
+
+CRITIC_PROMPT = """You are a critic agent that validates answers about a customer churn dataset.
+
+The dataset has 7032 customers. The overall churn rate is approximately 26.6%.
+
+Given the analyst's answer and the tool calls made, check for:
+1. Are there specific numbers in the answer that don't appear in any tool call results? (potential hallucination)
+2. Does the answer contradict known facts about the dataset?
+3. Is the answer responsive to the original question?
+
+Respond in EXACTLY this JSON format:
+```json
+{{
+  "valid": true/false,
+  "issues": ["issue1", "issue2"],
+  "suggested_fix": "corrected answer if invalid, or empty string if valid"
+}}
+```
+
+If valid, set "valid" to true and "issues" to an empty array.
+If invalid, explain what's wrong and provide a corrected version.
 """
 
 
@@ -76,7 +102,10 @@ def _parse_agent_response(text):
         pass
 
     # Try to find tool_call pattern
-    tool_match = re.search(r'"tool_call"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"[^}]*"args"\s*:\s*(\{[^}]*\})', text)
+    tool_match = re.search(
+        r'"tool_call"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"[^}]*"args"\s*:\s*(\{[^}]*\})',
+        text,
+    )
     if tool_match:
         tool_name = tool_match.group(1)
         try:
@@ -88,7 +117,11 @@ def _parse_agent_response(text):
     # Try to find final_answer pattern
     answer_match = re.search(r'"final_answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
     if answer_match:
-        return {"final_answer": answer_match.group(1).replace('\\"', '"').replace("\\n", "\n")}
+        return {
+            "final_answer": answer_match.group(1)
+            .replace('\\"', '"')
+            .replace("\\n", "\n")
+        }
 
     # If nothing matched, treat the whole response as a final answer
     return {"final_answer": text}
@@ -114,15 +147,74 @@ def _execute_tool(tool_name, args):
             return tool_func(args.get("code", ""))
         elif tool_name == "aggregate_segment_risk":
             return tool_func(args.get("segment_filters_json", "{}"))
+        elif tool_name == "generate_chart":
+            return tool_func(args.get("chart_config_json", "{}"))
         else:
             return tool_func()
     except Exception as e:
         return json.dumps({"error": f"Tool execution failed: {str(e)}"})
 
 
+def _run_critic(client, model, user_query, answer, tool_calls_made):
+    """
+    Run the critic agent to validate the analyst's answer.
+    Returns (is_valid, issues, corrected_answer).
+    """
+    tool_summary = []
+    for tc in tool_calls_made:
+        tool_summary.append(f"- {tc['tool']}({json.dumps(tc.get('args', {}))})")
+    tools_str = "\n".join(tool_summary) if tool_summary else "No tools were called."
+
+    critic_msg = f"""Original question: {user_query}
+
+Analyst's answer:
+{answer}
+
+Tool calls made:
+{tools_str}
+
+Please validate this answer. Respond with the JSON format specified."""
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": CRITIC_PROMPT},
+                {"role": "user", "content": critic_msg},
+            ],
+            temperature=0.0,
+            max_tokens=1024,
+        )
+        critic_text = response.choices[0].message.content
+        parsed = _parse_agent_response(critic_text)
+
+        if isinstance(parsed, dict) and "valid" in parsed:
+            return (
+                parsed.get("valid", True),
+                parsed.get("issues", []),
+                parsed.get("suggested_fix", ""),
+            )
+    except Exception:
+        pass
+
+    # If critic fails, assume valid (don't block the answer)
+    return True, [], ""
+
+
+def _extract_charts_from_tool_calls(tool_calls_made):
+    """Extract base64 chart images from tool call results."""
+    charts = []
+    for tc in tool_calls_made:
+        if tc.get("tool") == "generate_chart" and "result" in tc:
+            result = tc["result"]
+            if isinstance(result, dict) and result.get("type") == "chart":
+                charts.append(result.get("data", ""))
+    return charts
+
+
 def run_agent(user_query, chat_history=None, max_iterations=8):
     """
-    Run the autonomous agent loop with plan-act-check.
+    Run the autonomous agent loop with plan-act-check + critic.
 
     Args:
         user_query: The user's question
@@ -130,13 +222,15 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
         max_iterations: Maximum number of tool-call iterations
 
     Returns:
-        Dict with 'answer' and 'tool_calls_made' keys
+        Dict with 'answer', 'tool_calls_made', 'charts', 'critic_issues' keys
     """
     api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
         return {
             "answer": "GROQ_API_KEY is not set. Please set it in your environment or .env file.",
             "tool_calls_made": [],
+            "charts": [],
+            "critic_issues": [],
         }
 
     client = Groq(api_key=api_key)
@@ -156,7 +250,7 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
 
     # Add chat history for multi-turn context
     if chat_history:
-        for msg in chat_history[-6:]:  # Last 6 messages for context
+        for msg in chat_history[-6:]:
             messages.append(msg)
 
     messages.append({"role": "user", "content": user_query})
@@ -165,27 +259,34 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
     iterations = 0
     active_model = MODELS[0]
 
-    while iterations < max_iterations:
-        iterations += 1
-
-        response = None
+    def _call_llm(msgs):
+        """Try models in order, return response or None."""
+        nonlocal active_model
         for model in MODELS:
             try:
-                response = client.chat.completions.create(
+                resp = client.chat.completions.create(
                     model=model,
-                    messages=messages,
+                    messages=msgs,
                     temperature=0.1,
                     max_tokens=2048,
                 )
                 active_model = model
-                break
+                return resp
             except Exception:
                 continue
+        return None
+
+    while iterations < max_iterations:
+        iterations += 1
+
+        response = _call_llm(messages)
 
         if response is None:
             return {
                 "answer": "I couldn't connect to any available LLM model. Please check your GROQ_API_KEY and try again.",
-                "tool_calls_made": tool_calls_made,
+                "tool_calls_made": [],
+                "charts": [],
+                "critic_issues": [],
             }
 
         assistant_text = response.choices[0].message.content
@@ -195,34 +296,79 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
             tool_name = parsed["tool_call"]["name"]
             tool_args = parsed["tool_call"].get("args", {})
 
-            tool_calls_made.append({"tool": tool_name, "args": tool_args})
-
             tool_result = _execute_tool(tool_name, tool_args)
+
+            # Store result in tool_calls_made for critic
+            tool_calls_made.append({
+                "tool": tool_name,
+                "args": tool_args,
+                "result": json.loads(tool_result) if tool_result else {},
+            })
 
             # Self-check: if tool errored, add a note
             try:
                 result_data = json.loads(tool_result)
                 if "error" in result_data:
-                    tool_result += "\nNote: This tool call failed. Please try a different approach or report the issue to the user."
+                    tool_result += (
+                        "\nNote: This tool call failed. "
+                        "Please try a different approach or report the issue to the user."
+                    )
             except (json.JSONDecodeError, TypeError):
                 pass
 
             messages.append({"role": "assistant", "content": assistant_text})
             messages.append({
                 "role": "user",
-                "content": f"Tool result for '{tool_name}':\n{tool_result}\n\nNow continue with your plan. If you have enough information, provide your final_answer.",
+                "content": (
+                    f"Tool result for '{tool_name}':\n{tool_result}\n\n"
+                    "Now continue with your plan. If you have enough information, "
+                    "provide your final_answer."
+                ),
             })
 
         elif "final_answer" in parsed:
             answer = parsed["final_answer"]
 
-            # Final self-check: verify no hallucinated numbers
-            # Extract numbers from the answer
-            numbers_in_answer = re.findall(r'\b\d+\.?\d*%?\b', answer)
+            # Extract any charts the agent generated
+            charts = _extract_charts_from_tool_calls(tool_calls_made)
+
+            # Run critic to validate the answer
+            critic_valid, critic_issues, corrected = _run_critic(
+                client, active_model, user_query, answer, tool_calls_made
+            )
+
+            if not critic_valid and corrected:
+                # Critic found issues — retry once with the feedback
+                retry_messages = messages.copy()
+                retry_messages.append({
+                    "role": "assistant",
+                    "content": assistant_text,
+                })
+                retry_messages.append({
+                    "role": "user",
+                    "content": (
+                        f"A critic agent found issues with your answer:\n"
+                        + "\n".join(f"- {i}" for i in critic_issues)
+                        + f"\n\nPlease correct your answer. Here is a suggested fix:\n{corrected}"
+                    ),
+                })
+
+                retry_resp = _call_llm(retry_messages)
+                if retry_resp:
+                    retry_text = retry_resp.choices[0].message.content
+                    retry_parsed = _parse_agent_response(retry_text)
+                    if "final_answer" in retry_parsed:
+                        answer = retry_parsed["final_answer"]
+                        # Re-run critic on corrected answer
+                        critic_valid, critic_issues, _ = _run_critic(
+                            client, active_model, user_query, answer, tool_calls_made
+                        )
 
             return {
                 "answer": answer,
                 "tool_calls_made": tool_calls_made,
+                "charts": charts,
+                "critic_issues": critic_issues if not critic_valid else [],
             }
 
         else:
@@ -230,9 +376,13 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
             return {
                 "answer": assistant_text,
                 "tool_calls_made": tool_calls_made,
+                "charts": _extract_charts_from_tool_calls(tool_calls_made),
+                "critic_issues": [],
             }
 
     return {
         "answer": "I reached the maximum number of reasoning steps. Here's what I found so far based on the tools I called.",
         "tool_calls_made": tool_calls_made,
+        "charts": _extract_charts_from_tool_calls(tool_calls_made),
+        "critic_issues": [],
     }

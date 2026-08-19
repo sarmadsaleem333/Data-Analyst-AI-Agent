@@ -8,6 +8,8 @@ from src.data import (
     get_top_churn_customers,
     get_correlation_with_churn,
     execute_restricted_code,
+    generate_chart,
+    validate_answer_against_data,
 )
 from src.model import predict_churn_risk, predict_batch
 
@@ -161,6 +163,30 @@ def aggregate_segment_risk_tool(segment_filters_json):
         return json.dumps({"error": f"Segment analysis failed: {str(e)}"})
 
 
+def generate_chart_tool(chart_config_json):
+    """
+    Generate a chart and return it as base64-encoded PNG.
+    Input JSON: {"chart_type":"bar","x_col":"Contract","title":"Churn by Contract"}
+    Supported types: bar, histogram, box, scatter, heatmap, pie.
+    """
+    try:
+        config = json.loads(chart_config_json)
+        df = get_df()
+        result = generate_chart(
+            df,
+            chart_type=config.get("chart_type", "bar"),
+            x_col=config.get("x_col"),
+            y_col=config.get("y_col"),
+            hue_col=config.get("hue_col"),
+            title=config.get("title"),
+        )
+        return json.dumps(result)
+    except json.JSONDecodeError:
+        return json.dumps({"error": "Invalid JSON input."})
+    except Exception as e:
+        return json.dumps({"error": f"Chart generation failed: {str(e)}"})
+
+
 # Tool registry for the agent
 TOOLS = {
     "dataset_summary": {
@@ -207,5 +233,10 @@ TOOLS = {
         "function": aggregate_segment_risk_tool,
         "description": "Compute aggregate churn risk for a customer segment. Pass JSON with filters like {\"Contract\": \"Month-to-month\"} or numeric ranges like {\"tenure_max\": 12}.",
         "parameters": {"segment_filters_json": "JSON string"},
+    },
+    "generate_chart": {
+        "function": generate_chart_tool,
+        "description": "Generate a chart visualization. Pass JSON with chart_type (bar/histogram/box/scatter/heatmap/pie), x_col, y_col (optional), hue_col (optional), title (optional). Returns base64-encoded PNG image.",
+        "parameters": {"chart_config_json": "JSON string"},
     },
 }
