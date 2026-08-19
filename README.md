@@ -1,5 +1,9 @@
 # Autonomous Data Analyst for Customer Churn
 
+Deployed URL: https://data-analyst-ai-agent-bzywut5ot5jn4naep2sajs.streamlit.app/
+
+Qwen is currently the best-performing model for this agent and it is available on the free tier. However, due to the free-tier token limits, it may occasionally hit the maximum token quota and fail to respond. Instead of switching permanently to lower-performing models, I prefer to continue using Qwen as the primary model. When the Qwen token limit is reached, the system should wait for around 20 minutes and then retry once the limit resets.
+
 ## 1. Project Overview
 
 This repository contains the implementation of the Adept Tech Solutions AI Engineer assessment — **Autonomous Data Analyst**.
@@ -71,8 +75,7 @@ Saved artifacts in `models/`:
 
 1. `qwen/qwen3.6-27b` — works with JSON-formatted tool calling
 2. `openai/gpt-oss-20b`
-3. `llama-3.3-70b-versatile`
-4. `llama-3.1-8b-instant`
+
 
 The agent falls through to the next model if one is unavailable.
 
