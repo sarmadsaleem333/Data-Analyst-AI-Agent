@@ -16,20 +16,12 @@ You have the following tools available:
 
 ## YOUR CORE RULES
 
-1. **PLAN MULTI-STEP**: For complex questions, break them into steps. Example: "which customers are likely to churn and does it correlate with region?" requires multiple tool calls.
-
-2. **NEVER INVENT NUMBERS**: Every number in your final answer MUST come from a tool result. If you don't have a number from a tool, say you don't have it. This is the most important rule.
-
-3. **SELF-CHECK**: Before giving a final answer:
-   - If a tool returned an error, try a different approach
-   - If results look empty or nonsensical, investigate why
-   - If a computation seems wrong, verify it
-
-4. **USE REAL COMPUTATION**: For aggregations, filters, correlations, trends — use the execute_code or aggregate_segment_risk tools. Don't guess.
-
-5. **GENERATE CHARTS**: When the user asks to "show", "visualize", "plot", or "chart" something, use the generate_chart tool. Always include a chart when it would help illustrate the answer.
-
-6. **BE CONCISE**: Give direct answers. Only explain reasoning when asked.
+1. **PLAN MULTI-STEP**: For complex questions, break them into steps.
+2. **NEVER INVENT NUMBERS**: Every number in your final answer MUST come from a tool result.
+3. **SELF-CHECK**: Before giving a final answer, verify results make sense.
+4. **USE REAL COMPUTATION**: For aggregations, filters, correlations — use execute_code or aggregate_segment_risk tools.
+5. **GENERATE CHARTS**: When the user asks to "show", "visualize", "plot", or "chart", use the generate_chart tool.
+6. **BE CONCISE**: Give direct answers.
 
 ## HOW TO RESPOND
 
@@ -44,11 +36,11 @@ When you have enough information to answer, respond with:
 ```
 
 IMPORTANT: 
-- For execute_code tool, the code should use 'df' (the dataset) and 'pd' (pandas). Assign result to a variable named 'result'.
-- For predict_hypothetical, pass a JSON string of customer data.
-- For aggregate_segment_risk, pass a JSON string of filter conditions.
-- For generate_chart, pass JSON like: {{"chart_type":"bar","x_col":"Contract","title":"Churn by Contract"}}
-- You can make ONE tool call at a time. Plan your next step after seeing each result.
+- For execute_code: code should use 'df' (the dataset) and 'pd' (pandas). Assign result to 'result'.
+- For predict_hypothetical: pass a JSON string of customer data.
+- For aggregate_segment_risk: pass a JSON string of filter conditions.
+- For generate_chart: pass JSON like: {{"chart_type":"bar","x_col":"Contract","title":"Churn by Contract"}}
+- You can make ONE tool call at a time.
 - Always verify numbers in your final answer came from actual tool results.
 """
 
@@ -57,22 +49,35 @@ CRITIC_PROMPT = """You are a critic agent that validates answers about a custome
 The dataset has 7032 customers. The overall churn rate is approximately 26.6%.
 
 Given the analyst's answer and the tool calls made, check for:
-1. Are there specific numbers in the answer that don't appear in any tool call results? (potential hallucination)
-2. Does the answer contradict known facts about the dataset?
-3. Is the answer responsive to the original question?
+1. Are there specific numbers in the answer that don't appear in any tool call results?
+2. Does the answer contradict known facts?
+3. Is the answer responsive to the question?
 
-Respond in EXACTLY this JSON format:
+Respond with EXACTLY this JSON:
 ```json
-{{
-  "valid": true/false,
-  "issues": ["issue1", "issue2"],
-  "suggested_fix": "corrected answer if invalid, or empty string if valid"
-}}
+{{"valid": true, "issues": [], "suggested_fix": ""}}
 ```
-
-If valid, set "valid" to true and "issues" to an empty array.
-If invalid, explain what's wrong and provide a corrected version.
+If invalid, set valid to false, list issues, and provide a corrected answer.
 """
+
+NATIVE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": info["description"],
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    k: {"type": "string", "description": v}
+                    for k, v in info["parameters"].items()
+                },
+                "required": list(info["parameters"].keys()),
+            },
+        },
+    }
+    for name, info in TOOLS.items()
+]
 
 
 def _build_tool_descriptions():
@@ -85,9 +90,20 @@ def _build_tool_descriptions():
     return "\n".join(lines)
 
 
+def _strip_think_tags(text):
+    """Remove <think>...</think> blocks (even unclosed) from model responses."""
+    # First try to remove complete think blocks
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # If <think> exists without a closing tag, strip from <think> to end
+    if '<think>' in text:
+        text = text.split('<think>')[0]
+    return text.strip()
+
+
 def _parse_agent_response(text):
     """Parse agent response to extract tool calls or final answer."""
-    # Try to find JSON in code blocks
+    text = _strip_think_tags(text)
+
     json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
     if json_match:
         try:
@@ -95,26 +111,22 @@ def _parse_agent_response(text):
         except json.JSONDecodeError:
             pass
 
-    # Try to find JSON directly
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Try to find tool_call pattern
     tool_match = re.search(
-        r'"tool_call"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"[^}]*"args"\s*:\s*(\{[^}]*\})',
+        r'"tool_call"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})',
         text,
     )
     if tool_match:
-        tool_name = tool_match.group(1)
         try:
-            args = json.loads(tool_match.group(2))
+            tool_obj = json.loads(tool_match.group(1))
+            return {"tool_call": tool_obj}
         except json.JSONDecodeError:
-            args = {}
-        return {"tool_call": {"name": tool_name, "args": args}}
+            pass
 
-    # Try to find final_answer pattern
     answer_match = re.search(r'"final_answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
     if answer_match:
         return {
@@ -123,7 +135,6 @@ def _parse_agent_response(text):
             .replace("\\n", "\n")
         }
 
-    # If nothing matched, treat the whole response as a final answer
     return {"final_answer": text}
 
 
@@ -156,10 +167,7 @@ def _execute_tool(tool_name, args):
 
 
 def _run_critic(client, model, user_query, answer, tool_calls_made):
-    """
-    Run the critic agent to validate the analyst's answer.
-    Returns (is_valid, issues, corrected_answer).
-    """
+    """Run the critic agent to validate the analyst's answer."""
     tool_summary = []
     for tc in tool_calls_made:
         tool_summary.append(f"- {tc['tool']}({json.dumps(tc.get('args', {}))})")
@@ -184,8 +192,15 @@ Please validate this answer. Respond with the JSON format specified."""
             ],
             temperature=0.0,
             max_tokens=1024,
+            # No tools passed — critic must respond with plain JSON
         )
-        critic_text = response.choices[0].message.content
+
+        choice = response.choices[0]
+        # If model used native tool calling anyway, extract the text
+        if choice.message.tool_calls:
+            # Model tried to call a tool during validation — treat as valid
+            return True, [], ""
+        critic_text = choice.message.content or ""
         parsed = _parse_agent_response(critic_text)
 
         if isinstance(parsed, dict) and "valid" in parsed:
@@ -197,7 +212,6 @@ Please validate this answer. Respond with the JSON format specified."""
     except Exception:
         pass
 
-    # If critic fails, assume valid (don't block the answer)
     return True, [], ""
 
 
@@ -216,11 +230,6 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
     """
     Run the autonomous agent loop with plan-act-check + critic.
 
-    Args:
-        user_query: The user's question
-        chat_history: Optional list of previous messages for context
-        max_iterations: Maximum number of tool-call iterations
-
     Returns:
         Dict with 'answer', 'tool_calls_made', 'charts', 'critic_issues' keys
     """
@@ -235,12 +244,11 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
 
     client = Groq(api_key=api_key)
 
-    # Models to try in order (free-tier compatible)
+    # openai/gpt-oss-20b: native tool calling (reliable)
+    # qwen/qwen3.6-27b: manual JSON (may be rate-limited)
     MODELS = [
-        "qwen/qwen3.6-27b",
         "openai/gpt-oss-20b",
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
+        "qwen/qwen3.6-27b",
     ]
 
     tool_descriptions = _build_tool_descriptions()
@@ -248,7 +256,6 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
 
     messages = [{"role": "system", "content": system_msg}]
 
-    # Add chat history for multi-turn context
     if chat_history:
         for msg in chat_history[-6:]:
             messages.append(msg)
@@ -259,38 +266,99 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
     iterations = 0
     active_model = MODELS[0]
 
-    def _call_llm(msgs):
-        """Try models in order, return response or None."""
+    def _call_llm(msgs, use_native_tools=False):
+        """Try models in order, return (response, model_name, parsed_result)."""
         nonlocal active_model
         for model in MODELS:
             try:
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=msgs,
-                    temperature=0.1,
-                    max_tokens=2048,
-                )
+                kwargs = {
+                    "model": model,
+                    "messages": msgs,
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                }
+                if use_native_tools and model == "openai/gpt-oss-20b":
+                    kwargs["tools"] = NATIVE_TOOLS
+
+                resp = client.chat.completions.create(**kwargs)
                 active_model = model
-                return resp
+
+                choice = resp.choices[0]
+
+                # Handle native tool calling (openai/gpt-oss-20b)
+                if choice.message.tool_calls:
+                    tc = choice.message.tool_calls[0]
+                    tool_name = tc.function.name
+                    try:
+                        tool_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                    return resp, model, {"tool_call": {"name": tool_name, "args": tool_args}}
+
+                # Handle manual JSON tool calling (qwen)
+                raw_text = choice.message.content or ""
+                stripped = _strip_think_tags(raw_text)
+                parsed = _parse_agent_response(stripped)
+                return resp, model, parsed
+
             except Exception:
                 continue
-        return None
+
+        return None, None, None
 
     while iterations < max_iterations:
         iterations += 1
 
-        response = _call_llm(messages)
+        # First try: qwen with manual JSON. If that fails, try openai with native tools.
+        response, model_name, parsed = None, None, None
+
+        for model in MODELS:
+            try:
+                kwargs = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                }
+                if model == "openai/gpt-oss-20b":
+                    kwargs["tools"] = NATIVE_TOOLS
+
+                resp = client.chat.completions.create(**kwargs)
+                active_model = model
+
+                choice = resp.choices[0]
+
+                # Handle native tool calling (openai/gpt-oss-20b)
+                if choice.message.tool_calls:
+                    tc = choice.message.tool_calls[0]
+                    tool_name = tc.function.name
+                    try:
+                        tool_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                    parsed = {"tool_call": {"name": tool_name, "args": tool_args}}
+                    response = resp
+                    model_name = model
+                    break
+
+                # Handle manual JSON tool calling (qwen)
+                raw_text = choice.message.content or ""
+                stripped = _strip_think_tags(raw_text)
+                parsed = _parse_agent_response(stripped)
+                response = resp
+                model_name = model
+                break
+
+            except Exception:
+                continue
 
         if response is None:
             return {
-                "answer": "I couldn't connect to any available LLM model. Please check your GROQ_API_KEY and try again.",
+                "answer": "I couldn't connect to any available LLM model. Please try again in a few minutes.",
                 "tool_calls_made": [],
                 "charts": [],
                 "critic_issues": [],
             }
-
-        assistant_text = response.choices[0].message.content
-        parsed = _parse_agent_response(assistant_text)
 
         if "tool_call" in parsed:
             tool_name = parsed["tool_call"]["name"]
@@ -298,14 +366,12 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
 
             tool_result = _execute_tool(tool_name, tool_args)
 
-            # Store result in tool_calls_made for critic
             tool_calls_made.append({
                 "tool": tool_name,
                 "args": tool_args,
                 "result": json.loads(tool_result) if tool_result else {},
             })
 
-            # Self-check: if tool errored, add a note
             try:
                 result_data = json.loads(tool_result)
                 if "error" in result_data:
@@ -316,7 +382,7 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
             except (json.JSONDecodeError, TypeError):
                 pass
 
-            messages.append({"role": "assistant", "content": assistant_text})
+            messages.append({"role": "assistant", "content": response.choices[0].message.content or ""})
             messages.append({
                 "role": "user",
                 "content": (
@@ -328,21 +394,17 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
 
         elif "final_answer" in parsed:
             answer = parsed["final_answer"]
-
-            # Extract any charts the agent generated
             charts = _extract_charts_from_tool_calls(tool_calls_made)
 
-            # Run critic to validate the answer
             critic_valid, critic_issues, corrected = _run_critic(
                 client, active_model, user_query, answer, tool_calls_made
             )
 
             if not critic_valid and corrected:
-                # Critic found issues — retry once with the feedback
                 retry_messages = messages.copy()
                 retry_messages.append({
                     "role": "assistant",
-                    "content": assistant_text,
+                    "content": response.choices[0].message.content or "",
                 })
                 retry_messages.append({
                     "role": "user",
@@ -354,12 +416,10 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
                 })
 
                 retry_resp = _call_llm(retry_messages)
-                if retry_resp:
-                    retry_text = retry_resp.choices[0].message.content
-                    retry_parsed = _parse_agent_response(retry_text)
+                if retry_resp[0]:
+                    retry_parsed = retry_resp[2]
                     if "final_answer" in retry_parsed:
                         answer = retry_parsed["final_answer"]
-                        # Re-run critic on corrected answer
                         critic_valid, critic_issues, _ = _run_critic(
                             client, active_model, user_query, answer, tool_calls_made
                         )
@@ -372,16 +432,15 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
             }
 
         else:
-            # Couldn't parse response — treat as final answer
             return {
-                "answer": assistant_text,
+                "answer": str(parsed),
                 "tool_calls_made": tool_calls_made,
                 "charts": _extract_charts_from_tool_calls(tool_calls_made),
                 "critic_issues": [],
             }
 
     return {
-        "answer": "I reached the maximum number of reasoning steps. Here's what I found so far based on the tools I called.",
+        "answer": "I reached the maximum number of reasoning steps. Here's what I found so far.",
         "tool_calls_made": tool_calls_made,
         "charts": _extract_charts_from_tool_calls(tool_calls_made),
         "critic_issues": [],
