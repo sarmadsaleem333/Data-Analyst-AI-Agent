@@ -242,6 +242,12 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
     ]
+   # MODELS = [
+    #      "qwen/qwen3.6-27b",
+    #     "openai/gpt-oss-120b",
+    #     "openai/gpt-oss-20b",
+       
+    # ]
 
     tool_descriptions = _build_tool_descriptions()
     system_msg = SYSTEM_PROMPT.format(tool_descriptions=tool_descriptions)
@@ -272,7 +278,9 @@ def run_agent(user_query, chat_history=None, max_iterations=8):
                 )
                 active_model = model
                 return resp
-            except Exception:
+            except Exception as e:
+                print(f"[LLM ERROR] Model failed: {model}")
+                print(f"[LLM ERROR] {e}")
                 continue
         return None
 
