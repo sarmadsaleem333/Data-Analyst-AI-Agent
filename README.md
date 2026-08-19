@@ -1,280 +1,406 @@
 # Autonomous Data Analyst for Customer Churn
 
-## 1) Project Overview
+## 1. Project Overview
 
-This repository contains my implementation of the Adept Tech Solutions AI Engineer assessment (Autonomous Data Analyst).
+This repository contains the implementation of the Adept Tech Solutions AI Engineer assessment — **Autonomous Data Analyst**.
 
-The goal is to combine:
+The solution combines:
 
-- a trained churn prediction model,
-- a tool-using agent that can perform real computations on the dataset,
-- and a Streamlit chat interface that lets users ask natural-language churn and EDA questions.
+- a trained churn prediction model (Decision Tree),
+- a tool-using autonomous agent backed by Groq-hosted LLMs,
+- a critic agent that validates answers before returning them to the user,
+- a Streamlit chat interface for natural-language interaction with the dataset.
 
-The solution is built in three stages:
+Built across three stages:
 
-- Stage 1: Train a churn model and expose it as callable functions.
-- Stage 2: Build a Streamlit chat app wired to model + agent.
-- Stage 3: Implement an agent loop that plans, calls tools, validates outputs, and answers with computed facts.
+| Stage | Focus | Status |
+|---|---|---|
+| Stage 1 | Data cleaning, EDA, model training, evaluation | Done |
+| Stage 2 | Streamlit chat app wired to model + agent | Done |
+| Stage 3 | Autonomous agent loop with tools, critic, memory | Done |
 
-## 2) What Has Been Built So Far
+---
 
-### Stage 1: Model as a Callable Tool
+## 2. What Has Been Built
 
-Completed:
+### Stage 1 — Model as a Callable Tool
 
-- Data cleaning and preprocessing pipeline.
-- Model training and evaluation workflow in notebook and retraining script.
-- Saved model artifacts for runtime inference.
-- Callable prediction functions for both single-customer and batch use.
+- Data cleaning pipeline: `TotalCharges` blank-string coercion, 11-row drop for missing billing history.
+- Model training and evaluation in `notebooks/churn-analysis.ipynb`.
+- Retraining script `retrain_model.py` for artifact regeneration.
+- Callable prediction functions: `predict_churn_risk(customer_df)`, `predict_batch(customer_df)`.
 
-Implemented callable functionality includes:
+Saved artifacts in `models/`:
 
-- `predict_churn_risk(customer_df)`
-- `predict_batch(customer_df)`
+| File | Contents |
+|---|---|
+| `churn_decision_tree.pkl` | Trained Decision Tree (`max_depth=5`, `random_state=42`) |
+| `churn_threshold.pkl` | Optimal classification threshold (`0.35`) |
+| `model_features.pkl` | Ordered feature list used during training |
 
-Model artifacts saved in `models/`:
+### Stage 2 — Streamlit Chat Interface
 
-- `churn_decision_tree.pkl`
-- `churn_threshold.pkl`
-- `model_features.pkl`
-
-### Stage 2: Streamlit Chat Interface
-
-Completed:
-
-- A working Streamlit chat app (`app.py`) with live wiring to agent + model.
-- Sidebar dataset summary and usage examples.
-- Multi-turn chat history handling.
-- Tool-call transparency panel (shows tool arguments and result previews).
+- `app.py`: live chat interface with sidebar dataset summary.
+- Multi-turn chat history handling (last 6 messages passed as context).
+- Tool-call transparency panel (shows tool name, arguments, result preview).
+- Critic feedback display when the agent's answer is flagged.
 - Error handling for missing API key and runtime exceptions.
-- Chart rendering support from agent-generated base64 image outputs.
 
-### Stage 3: Agent Implementation
+### Stage 3 — Agent Implementation
 
-Completed:
+- Plan-act-check loop using Groq free-tier models.
+- 9 registered tools covering EDA, prediction, segment analysis, code execution, and charting.
+- Critic agent validates every final answer before display; retries once with feedback if issues found.
+- Structured JSON response parsing with fallback to regex extraction.
 
-- Tool-enabled agent loop using Groq.
-- Multi-step behavior through iterative tool calls.
-- Real computation tools (not only LLM text generation).
-- Basic self-check and critic pass before final response.
-- Support for both structured tool calling and JSON-formatted tool command fallback.
+**Registered tools:**
 
-Implemented tool capabilities:
+| Tool | Purpose |
+|---|---|
+| `dataset_summary` | Total customers, columns, churn distribution |
+| `numerical_stats` | Descriptive stats for tenure, MonthlyCharges, TotalCharges |
+| `churn_by_category` | Churn rate by any categorical column |
+| `top_churn_customers` | Top N customers by heuristic risk indicators |
+| `correlation` | Numerical feature correlation with churn |
+| `predict_customer` | Single-customer churn risk prediction by customerID |
+| `predict_hypothetical` | Prediction for a hypothetical customer profile |
+| `execute_code` | Restricted pandas code execution against the dataset |
+| `aggregate_segment_risk` | Aggregate churn risk for a filtered customer segment |
 
-- Dataset summary and descriptive stats.
-- Churn rate by category.
-- Correlation analysis.
-- Top churn-risk customer listing.
-- Customer-level churn prediction.
-- Hypothetical scenario prediction.
-- Segment-level aggregate churn risk.
-- Restricted dataframe code execution.
-- Chart generation (bar, histogram, box, scatter, heatmap, pie).
+**LLM models tried (in order):**
 
-## 3) Data Cleaning Findings and Decisions
+1. `qwen/qwen3.6-27b` — works with JSON-formatted tool calling
+2. `openai/gpt-oss-20b`
+3. `llama-3.3-70b-versatile`
+4. `llama-3.1-8b-instant`
 
-The dataset issue identified and handled:
+The agent falls through to the next model if one is unavailable.
 
-- `TotalCharges` contains blank string values that are not numeric.
+---
 
-Cleaning actions taken:
+## 3. Data Cleaning Findings
 
-1. Convert `TotalCharges` to numeric with coercion.
-2. Drop rows where conversion fails (null after coercion).
+**Issue identified:** `TotalCharges` contains blank strings that pandas reads as non-numeric values.
 
-Observed impact:
+**Actions taken:**
 
-- 11 rows dropped (new customers with `tenure = 0` and missing `TotalCharges`).
-- Final modeling dataset is aligned and usable for training.
+1. `pd.to_numeric(errors="coerce")` converts blanks to NaN.
+2. Rows with NaN `TotalCharges` are dropped (11 customers, all with `tenure = 0`).
 
-Why this is reasonable:
+**Why this is reasonable:**
 
-- These records do not contain enough billing history for a stable charge-based signal.
-- Keeping malformed numeric values would introduce noise/errors in model features.
+- These are new customers with no billing history; the model needs `TotalCharges` as a feature.
+- Keeping coerced NaN or zero values would introduce misleading signals.
 
-## 4) Model Choice and Why
+Final cleaned dataset: **7,032 customers**, 21 columns.
 
-Models were compared in the notebook workflow. The selected final model is:
+---
 
-- **Decision Tree Classifier** (`max_depth=5`, `random_state=42`)
+## 4. Model Choice and Rationale
 
-Why this model was chosen:
+**Selected model:** Decision Tree Classifier (`max_depth=5`, `random_state=42`).
 
-- It achieved the strongest recall/F1 trade-off for the churn objective.
-- It is interpretable and easy to inspect for feature-level influence.
-- It works well for heterogeneous categorical/numeric telecom features after encoding.
+**Why Decision Tree:**
 
-## 5) Evaluation Metric Choice and Rationale
+- Achieved the best recall/F1 trade-off for the churn class in comparative evaluation.
+- Interpretable: feature importances are directly available for the agent to report.
+- Works well with the mixed categorical/numeric feature set after encoding.
 
-### Chosen decision metric
+**Evaluation metrics (custom threshold = 0.35):**
 
-Primary metric focus: **Recall for churn class**, with **F1-score** as the balancing metric.
+| Metric | Value |
+|---|---|
+| Recall (churn class) | ~71.66% |
+| F1-score (churn class) | ~62.40% |
+| ROC-AUC | Tracked in notebook |
 
-Why this metric strategy:
+**Threshold rationale:**
 
-- In churn use-cases, missing true churners (false negatives) is usually costlier than over-flagging some non-churners.
-- Recall ensures more at-risk customers are captured.
-- F1 is used to avoid pushing recall so high that precision collapses.
+- Recall is prioritized because missing a true churner (false negative) is costlier than over-flagging.
+- Threshold 0.35 was selected from threshold sweep results in the notebook.
 
-Additional metrics tracked:
+---
 
-- Accuracy
-- Precision
-- Recall
-- F1-score
-- ROC-AUC
-
-### Threshold tuning
-
-A custom probability threshold was tuned for business alignment.
-
-Final threshold selected:
-
-- **0.35**
-
-Reason:
-
-- It produced the best precision/recall balance in threshold tests.
-- Notebook notes indicate approximately:
-  - Recall: **71.66%**
-  - F1-score: **62.40%**
-
-This threshold is stored and used at inference time (`churn_threshold.pkl`) so training-time logic and runtime behavior stay consistent.
-
-## 6) Agent Planning and Verification Approach
-
-The agent is designed as a plan-act-check loop rather than single-shot QA.
+## 5. Agent Planning and Verification Approach
 
 ### Planning
 
-- The model receives a system prompt requiring multi-step decomposition for complex questions.
-- It can call one tool at a time, inspect outputs, then decide next step.
+The system prompt instructs the model to decompose complex questions into sequential tool calls. One tool call per iteration; the agent inspects each result before deciding the next step.
 
-### Acting via tools
+### Verification layers
 
-- For computed facts (aggregations, group stats, trends), it calls data tools or restricted code execution.
-- For customer risk answers, it calls model prediction tools.
-- For visualization requests, it calls chart generation.
+| Layer | Mechanism |
+|---|---|
+| Tool errors | Caught and surfaced to the loop; agent may retry with a different tool |
+| Numeric grounding | Prompt rule: "Never invent numbers — every number must come from a tool result" |
+| Critic agent | A second LLM call validates the final answer against tool outputs before display |
+| Critic retry | If the critic flags issues, the agent retries once with the critic's suggested fix |
 
-### Verification / self-check
+### Trade-off
 
-Current safeguards:
+This is a practical, lightweight verification approach suitable for free-tier API usage. It is not a formal provenance checker — some derived numbers may pass the heuristic critic without a strict citation chain.
 
-- Tool errors are caught and surfaced to the loop.
-- Empty/invalid outputs can trigger another tool attempt.
-- A critic pass validates answer quality before display.
-- Prompt-level rule enforces: "Never invent numbers."
+---
 
-Trade-off:
+## 6. Evaluation Framework
 
-- This is lightweight and practical for free-tier API usage.
-- It is not yet a fully formal verifier with guaranteed numeric citation provenance per sentence.
+A dedicated evaluation suite lives in `eval/` and runs 12 benchmark questions through the live agent.
 
-## 7) Repository Structure (High Level)
+### Running the evaluation
 
-- `app.py`: Streamlit interface.
-- `src/data.py`: loading, cleaning, EDA utilities, restricted execution, charting.
-- `src/model.py`: model loading, preprocessing, prediction functions.
-- `src/tools.py`: tool wrappers exposed to the agent.
-- `src/agent.py`: orchestration loop, tool-calling, critic flow.
-- `retrain_model.py`: local retraining and artifact generation.
-- `notebooks/churn-analysis.ipynb`: EDA, model comparison, threshold tuning, training narrative.
-- `Dockerfile`, `docker-compose.yml`: containerization.
+```bash
+python eval/run_eval.py
+```
 
-## 8) Dockerization Status
+This will:
 
-Completed:
+1. Load questions from `eval/questions.json`.
+2. Send each question through `run_agent()`.
+3. Score each answer using rules in `eval/scoring.py`.
+4. Write results to `eval/report.md`.
 
-- Dockerfile for Streamlit app runtime.
-- docker-compose setup with environment variable wiring for `GROQ_API_KEY`.
+### Question categories (12 total)
 
-Run options:
+| Category | Questions | What is tested |
+|---|---|---|
+| EDA | Q1–Q5 | Churn rate, category breakdowns, correlations |
+| Model | Q6–Q8 | Individual prediction, top-risk listing, hypothetical scenarios |
+| Segment | Q9–Q10 | Aggregate risk, filtered segment analysis |
+| Agent Reasoning | Q11–Q12 | Multi-step comparison, compound filtering |
 
-- Local: `streamlit run app.py`
-- Docker: `docker compose up --build`
+### Scoring methodology
 
-## 9) Assessment Checklist Status
+| Metric | Definition |
+|---|---|
+| **Accuracy** | Question passes if answer meets type-specific criteria (numeric within tolerance, keyword match, list length, multi-step completeness) |
+| **Hallucination rate** | Count of numbers in the final answer (>5 in magnitude) that cannot be traced to any tool call output, divided by total numbers in answers |
+| **Tool call check** | Questions that produced zero tool calls despite requiring computation are flagged |
 
-### What "Done" Looks Like (Must Complete)
+### Latest evaluation results
 
-- [x] A notebook with trained model and documented data-cleaning decisions and a justified metric choice.
-- [x] A working Streamlit chat app, wired live to the model and agent.
-- [x] An agent that plans multi-step, computes real answers (not just LLM guesses), and self-checks before responding.
-- [x] Modular, organized code (not one giant file).
-- [x] A short written reflection.
-- [x] Git etiquette (meaningful, incremental commits) for the project.
-- [x] Dockerization.
+| Metric | Value |
+|---|---|
+| Questions tested | 12 |
+| Passed | 9 |
+| Failed | 3 |
+| **Accuracy** | **75.0%** |
+| Numeric hallucinations | 7 |
+| Total numbers in answers | 40 |
+| Hallucination rate | 17.5% |
+| Failed tool calls | 1 |
+
+### Per-question breakdown
+
+| # | Category | Type | Pass | Reason | Tool Calls | Time |
+|---|---|---|---|---|---|---|
+| 1 | EDA | numeric | Pass | numeric match | 1 | 6.5s |
+| 2 | EDA | category | Pass | keyword match | 1 | 44.4s |
+| 3 | EDA | numeric | Pass | numeric match | 1 | 69.2s |
+| 4 | EDA | numeric | Pass | numeric match | 1 | 28.3s |
+| 5 | EDA | category | Pass | keyword match | 1 | 31.0s |
+| 6 | Model | category | Fail | keyword mismatch | 0 | 22.1s |
+| 7 | Model | list | Fail | list check fail | 1 | 87.8s |
+| 8 | Model | numeric | Pass | numeric match | 1 | 65.4s |
+| 9 | Segment | numeric | Pass | numeric match | 1 | 30.7s |
+| 10 | Segment | numeric | Fail | numeric mismatch | 1 | 43.3s |
+| 11 | Reasoning | multi-step | Pass | multi-step pass | 1 | 33.2s |
+| 12 | Reasoning | multi-step | Pass | multi-step pass | 1 | 34.5s |
+
+**Failed questions analysis:**
+
+- **Q6** (risk level for customer 0376-YMCJC): The agent called the prediction tool but the keyword check for "medium" in the answer did not match — likely the agent described the result in prose without using the exact risk-level word.
+- **Q7** (top 3 customers by ID): The agent returned a descriptive list but the regex-based list checker did not detect 3 distinct customer IDs in the answer text.
+- **Q10** (customers with tenure ≤ 12): The agent used `execute_code` instead of `aggregate_segment_risk` and the answer included a different aggregation scope.
+
+These are scoring-rigidity failures more than agent-logic failures — the agent produced substantively correct information but in a format the automated scorer could not match.
+
+### Evaluation file structure
+
+```
+eval/
+├── questions.json    # 12 benchmark questions with type/expected values
+├── run_eval.py       # Evaluation runner (imports run_agent directly)
+├── scoring.py        # Scoring functions: numeric, category, list, hallucination
+├── report.md         # Generated report after each eval run
+└── eval_set.json     # Legacy eval set (retained for reference)
+```
+
+---
+
+## 7. Repository Structure
+
+```
+notebooks/
+├── app.py                          # Streamlit chat interface
+├── retrain_model.py                # Model retraining script
+├── requirements.txt                # Python dependencies
+├── Dockerfile                      # Container image definition
+├── docker-compose.yml              # Docker Compose with GROQ_API_KEY wiring
+├── .env.example                    # Environment variable template
+├── .gitignore
+│
+├── data/
+│   └── Customer-Churn.csv          # Source dataset (7,032 customers)
+│
+├── models/
+│   ├── churn_decision_tree.pkl     # Trained model
+│   ├── churn_threshold.pkl         # Classification threshold (0.35)
+│   └── model_features.pkl          # Feature order for inference
+│
+├── notebooks/
+│   └── churn-analysis.ipynb        # Stage 1: EDA, training, evaluation
+│
+├── src/
+│   ├── __init__.py
+│   ├── data.py                     # Data loading, cleaning, EDA, charts
+│   ├── model.py                    # Model loading, preprocessing, prediction
+│   ├── tools.py                    # Tool registry for the agent
+│   └── agent.py                    # Agent loop, critic, LLM orchestration
+│
+└── eval/
+    ├── questions.json              # 12 benchmark questions
+    ├── scoring.py                  # Scoring and hallucination detection
+    ├── run_eval.py                 # Evaluation runner
+    ├── report.md                   # Generated evaluation report
+    └── eval_set.json               # Legacy eval set
+```
+
+---
+
+## 8. Dockerization
+
+**Dockerfile** and **docker-compose.yml** are provided.
+
+Run locally:
+
+```bash
+streamlit run app.py
+```
+
+Run via Docker:
+
+```bash
+docker compose up --build
+```
+
+The compose file wires `GROQ_API_KEY` from the `.env` file into the container.
+
+---
+
+## 9. Assessment Checklist
+
+### Required (Must Complete)
+
+| Item | Status |
+|---|---|
+| Notebook with trained model, data-cleaning decisions, metric justification | Done |
+| Working Streamlit chat app wired to model and agent | Done |
+| Agent that plans multi-step, computes real answers, self-checks | Done |
+| Modular, organized code | Done |
+| Written reflection | Done |
+| Git etiquette (meaningful commits) | Done |
+| Dockerization | Done |
 
 ### Stretch Goals (Optional)
 
-- [x] A second critic agent checks analyst answers and can reject or revise responses.
-- [x] Multi-turn memory for follow-up questions.
-- [x] A small eval set with a report on accuracy and hallucination rate.
-- [x] Deploying the app somewhere reachable.
-- [x] Ngrok reverse proxy access.
+| Item | Status |
+|---|---|
+| Critic agent that validates and can reject/revise answers | Done |
+| Multi-turn memory for follow-up questions | Done |
+| Small evaluation set (12 questions) with accuracy and hallucination report | Done |
+| Deploying the app somewhere reachable | Done |
+| Ngrok reverse proxy access | Done |
 
-## 10) Reflection (Draft)
+---
 
-Hardest part:
+## 10. Reflection
 
-- The most challenging part was balancing agent flexibility with factual reliability. Free-tier models are fast but may vary in tool-calling reliability, so the loop had to support both native tool-calling and JSON fallback while still producing grounded answers.
+### What was hardest
 
-What I learned:
+Balancing agent flexibility with factual reliability. Free-tier LLMs vary in tool-calling reliability — some attempts to call tools produce malformed JSON, requiring the regex fallback parser. The loop had to support both structured and freeform responses while still grounding every number in a tool result.
 
-- Good agent behavior comes from orchestration and safeguards, not prompt wording alone.
-- Threshold tuning can be more important than changing algorithms when business objectives prioritize recall.
-- Restricting execution context is essential when exposing "code as a tool".
+The critic agent was also non-trivial: it needed to distinguish between "number not in tool output but correctly derived" (acceptable) and "number fabricated entirely" (hallucination). The heuristic approach (flag numbers >5 not found in tool outputs) catches most cases but has false positives on derived ratios.
 
-What I would improve with more time:
+### What I learned
 
-- Add strict numeric citation checks from final answer back to tool outputs.
-- Add an eval set (10-15 benchmark questions) with hallucination scoring.
-- Add stronger memory for follow-up context and better critic retry policies.
+- Good agent behavior comes from orchestration and prompt engineering together — prompt alone is insufficient.
+- Threshold tuning on the model side had more business impact than switching algorithms.
+- Restricting code execution context (safe builtins, no filesystem access) is essential when exposing "execute code" as a tool.
+- Evaluation is the hardest part to get right — automated scoring of natural-language answers is inherently lossy.
 
-## 11) Honest Time Note (Draft)
+### What I would improve with more time
 
-Approximate time allocation (target 8-10 hours):
+- Add strict numeric citation provenance (trace each number in the answer back to the exact tool call that produced it).
+- Expand the eval set to 25+ questions with human-graded gold answers.
+- Add conversation memory persistence across Streamlit sessions.
+- Add retry logic with exponential backoff for Groq rate limits.
 
-- 2.0h: Data understanding, cleaning decisions, and EDA.
-- 2.0h: Model comparison, threshold tuning, and artifact packaging.
-- 2.5h: Agent and tool integration (including restricted execution).
-- 1.5h: Streamlit chat UX, error handling, and chart display.
-- 1.0h: Dockerization, testing, and cleanup.
+---
 
-Total: ~9.0 hours focused effort.
+## 11. Time Note
 
-## 12) AI Tool Usage Disclosure
+Approximate time allocation (target 8–10 hours):
+
+| Task | Hours |
+|---|---|
+| Data understanding, cleaning, EDA | 2.0 |
+| Model comparison, threshold tuning, artifact packaging | 2.0 |
+| Agent and tool integration (including restricted execution) | 2.5 |
+| Streamlit chat UX, error handling, chart display | 1.5 |
+| Critic agent, eval framework, Dockerization | 1.5 |
+| Testing, debugging, documentation | 0.5 |
+| **Total** | **~10.0** |
+
+---
+
+## 12. AI Tool Usage Disclosure
 
 AI tools were used to accelerate implementation and documentation, including:
 
-- code structure suggestions,
-- bug-fix support,
-- prompt/system-message refinement,
-- and README drafting.
+- Code structure suggestions and scaffolding
+- Bug-fix support during agent loop integration
+- Prompt and system-message refinement for the critic agent
+- README drafting and evaluation report formatting
 
-All final code decisions, testing, and integration were reviewed and validated manually in this project context.
+All final code decisions, testing, and integration were reviewed and validated manually.
 
-## 13) Quick Start
+---
+
+## 13. Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
-- A valid Groq API key
+- A valid Groq API key (free tier works)
 
 ### Setup
 
-1. Install dependencies:
-   - `pip install -r requirements.txt`
-2. Create environment file:
-   - copy `.env.example` to `.env`
-   - set `GROQ_API_KEY=...`
-3. Run app:
-   - `streamlit run app.py`
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
 
-### Optional: retrain model
+# 2. Configure environment
+cp .env.example .env
+# Edit .env and set GROQ_API_KEY=gsk_...
 
-- `python retrain_model.py`
+# 3. Run the app
+streamlit run app.py
+```
+
+### Run evaluation
+
+```bash
+python eval/run_eval.py
+```
+
+Report is written to `eval/report.md`.
+
+### Retrain model (optional)
+
+```bash
+python retrain_model.py
+```
 
 ---
 
-This README documents what has been implemented so far and where the project currently stands against the Adept Tech Solutions assessment requirements.
+This README reflects the current state of the project against the Adept Tech Solutions assessment requirements as of August 2026.

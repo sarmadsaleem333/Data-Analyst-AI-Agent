@@ -1,0 +1,95 @@
+[
+  {
+    "id": 1,
+    "question": "What is the overall churn rate in this dataset?",
+    "answer_type": "numeric",
+    "expected_value": 26.58,
+    "tolerance": 2.0,
+    "category": "EDA"
+  },
+  {
+    "id": 2,
+    "question": "Which contract type has the highest churn rate?",
+    "answer_type": "category",
+    "expected_keywords": ["month-to-month"],
+    "category": "EDA"
+  },
+  {
+    "id": 3,
+    "question": "What is the churn rate for customers using Electronic check as their payment method?",
+    "answer_type": "numeric",
+    "expected_value": 45.29,
+    "tolerance": 3.0,
+    "category": "EDA"
+  },
+  {
+    "id": 4,
+    "question": "What is the average monthly charge of customers who churned?",
+    "answer_type": "numeric",
+    "expected_value": 74.44,
+    "tolerance": 5.0,
+    "category": "EDA"
+  },
+  {
+    "id": 5,
+    "question": "Does churn correlate more strongly with tenure or monthly charges?",
+    "answer_type": "category",
+    "expected_keywords": ["tenure"],
+    "rationale": "tenure has corr -0.354 (stronger magnitude) vs monthly charges 0.193",
+    "category": "EDA"
+  },
+  {
+    "id": 6,
+    "question": "Predict the churn risk for customer 0376-YMCJC. What is their risk level?",
+    "answer_type": "category",
+    "expected_keywords": ["medium"],
+    "rationale": "risk_score=0.513, risk_level=Medium",
+    "category": "Model"
+  },
+  {
+    "id": 7,
+    "question": "List the top 3 customers most likely to churn based on risk indicators.",
+    "answer_type": "list",
+    "expected_min_items": 3,
+    "category": "Model"
+  },
+  {
+    "id": 8,
+    "question": "Predict churn risk for a hypothetical customer: Female, tenure 2, Month-to-month contract, Fiber optic internet, Electronic check payment, MonthlyCharges 95, TotalCharges 190. What is the risk score?",
+    "answer_type": "numeric",
+    "expected_value_range": [0.3, 0.9],
+    "tolerance": 0.15,
+    "rationale": "High-risk profile: short tenure, month-to-month, fiber, e-check, high charges",
+    "category": "Model"
+  },
+  {
+    "id": 9,
+    "question": "For customers on month-to-month contracts, what is the predicted aggregate churn rate percentage?",
+    "answer_type": "numeric",
+    "expected_value": 60.49,
+    "tolerance": 5.0,
+    "category": "Segment"
+  },
+  {
+    "id": 10,
+    "question": "How many customers in the dataset have tenure of 12 months or less?",
+    "answer_type": "numeric",
+    "expected_value": 2175,
+    "tolerance": 100,
+    "category": "Segment"
+  },
+  {
+    "id": 11,
+    "question": "Compare the churn rate between fiber optic and DSL internet service customers. Which has higher churn and by roughly how much?",
+    "answer_type": "multi_step",
+    "expected_keywords": ["fiber", "higher"],
+    "category": "Agent Reasoning"
+  },
+  {
+    "id": 12,
+    "question": "For customers who are senior citizens on month-to-month contracts with high monthly charges (above 70), how many are predicted to churn and what is their average risk score?",
+    "answer_type": "multi_step",
+    "expected_keywords": ["churn", "risk", "score"],
+    "category": "Agent Reasoning"
+  }
+]
