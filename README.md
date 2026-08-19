@@ -1,15 +1,20 @@
 # Autonomous Data Analyst for Customer Churn
 
-Deployed URL: https://data-analyst-ai-agent-bzywut5ot5jn4naep2sajs.streamlit.app/
+**Deployed URL:** https://data-analyst-ai-agent-bzywut5ot5jn4naep2sajs.streamlit.app/
 
-Qwen is currently the best-performing model for this agent and it is available on the free tier. However, due to the free-tier token limits, it may occasionally hit the maximum token quota and fail to respond. Instead of switching permanently to lower-performing models, I prefer to continue using Qwen as the primary model. When the Qwen token limit is reached, the system should wait for around 20 minutes and then retry once the limit resets.
+**Primary model:** `qwen/qwen3.6-27b` (Groq)
+
+Qwen is currently the best-performing model for this agent and is available on the free tier. OpenAI-compatible models hosted on Groq (e.g. `openai/gpt-oss-20b`) were evaluated as fallbacks but produced noticeably weaker tool-calling reliability and answer quality.  
+
+Because of free-tier token limits, Qwen may occasionally hit its maximum quota and fail to respond. Instead of permanently switching to lower-performing models, the system stays on Qwen. When the token limit is reached the agent returns a clear message asking the user to wait approximately 20 minutes for the quota to reset, then retry. This keeps evaluation results and production behaviour consistent with the strongest model.
+
+---
 
 ## 1. Project Overview
 
 This repository contains the implementation of the Adept Tech Solutions AI Engineer assessment — **Autonomous Data Analyst**.
 
 The solution combines:
-
 - a trained churn prediction model (Decision Tree),
 - a tool-using autonomous agent backed by Groq-hosted LLMs,
 - a critic agent that validates answers before returning them to the user,
@@ -28,7 +33,6 @@ Built across three stages:
 ## 2. What Has Been Built
 
 ### Stage 1 — Model as a Callable Tool
-
 - Data cleaning pipeline: `TotalCharges` blank-string coercion, 11-row drop for missing billing history.
 - Model training and evaluation in `notebooks/churn-analysis.ipynb`.
 - Retraining script `retrain_model.py` for artifact regeneration.
@@ -43,15 +47,14 @@ Saved artifacts in `models/`:
 | `model_features.pkl` | Ordered feature list used during training |
 
 ### Stage 2 — Streamlit Chat Interface
-
 - `app.py`: live chat interface with sidebar dataset summary.
 - Multi-turn chat history handling (last 6 messages passed as context).
 - Tool-call transparency panel (shows tool name, arguments, result preview).
 - Critic feedback display when the agent's answer is flagged.
 - Error handling for missing API key and runtime exceptions.
+- User-facing message when Qwen free-tier token limit is hit (“please wait a few minutes and try again”).
 
 ### Stage 3 — Agent Implementation
-
 - Plan-act-check loop using Groq free-tier models.
 - 9 registered tools covering EDA, prediction, segment analysis, code execution, and charting.
 - Critic agent validates every final answer before display; retries once with feedback if issues found.
@@ -71,13 +74,16 @@ Saved artifacts in `models/`:
 | `execute_code` | Restricted pandas code execution against the dataset |
 | `aggregate_segment_risk` | Aggregate churn risk for a filtered customer segment |
 
-**LLM models tried (in order):**
+**LLM model strategy**
 
-1. `qwen/qwen3.6-27b` — works with JSON-formatted tool calling
-2. `openai/gpt-oss-20b`
+| Priority | Model | Notes |
+|---|---|---|
+| 1 (primary) | `qwen/qwen3.6-27b` | Best tool-calling reliability and answer quality. Used for all evaluation runs. |
+| 2 (evaluated only) | `openai/gpt-oss-20b` | Tested as fallback. Noticeably weaker results; **not used in normal operation**. |
 
-
-The agent falls through to the next model if one is unavailable.
+- The agent is intentionally configured to stay on Qwen.
+- When Qwen returns a free-tier token-limit / rate-limit error, the system surfaces a friendly message asking the user to wait ~20 minutes and retry, rather than silently falling back to a poorer model.
+- This keeps both the live demo and the evaluation report representative of the best-performing configuration.
 
 ---
 
@@ -86,12 +92,10 @@ The agent falls through to the next model if one is unavailable.
 **Issue identified:** `TotalCharges` contains blank strings that pandas reads as non-numeric values.
 
 **Actions taken:**
-
 1. `pd.to_numeric(errors="coerce")` converts blanks to NaN.
 2. Rows with NaN `TotalCharges` are dropped (11 customers, all with `tenure = 0`).
 
 **Why this is reasonable:**
-
 - These are new customers with no billing history; the model needs `TotalCharges` as a feature.
 - Keeping coerced NaN or zero values would introduce misleading signals.
 
@@ -104,7 +108,6 @@ Final cleaned dataset: **7,032 customers**, 21 columns.
 **Selected model:** Decision Tree Classifier (`max_depth=5`, `random_state=42`).
 
 **Why Decision Tree:**
-
 - Achieved the best recall/F1 trade-off for the churn class in comparative evaluation.
 - Interpretable: feature importances are directly available for the agent to report.
 - Works well with the mixed categorical/numeric feature set after encoding.
@@ -118,7 +121,6 @@ Final cleaned dataset: **7,032 customers**, 21 columns.
 | ROC-AUC | Tracked in notebook |
 
 **Threshold rationale:**
-
 - Recall is prioritized because missing a true churner (false negative) is costlier than over-flagging.
 - Threshold 0.35 was selected from threshold sweep results in the notebook.
 
@@ -127,7 +129,6 @@ Final cleaned dataset: **7,032 customers**, 21 columns.
 ## 5. Agent Planning and Verification Approach
 
 ### Planning
-
 The system prompt instructs the model to decompose complex questions into sequential tool calls. One tool call per iteration; the agent inspects each result before deciding the next step.
 
 ### Verification layers
@@ -138,9 +139,9 @@ The system prompt instructs the model to decompose complex questions into sequen
 | Numeric grounding | Prompt rule: "Never invent numbers — every number must come from a tool result" |
 | Critic agent | A second LLM call validates the final answer against tool outputs before display |
 | Critic retry | If the critic flags issues, the agent retries once with the critic's suggested fix |
+| Rate-limit handling | On Qwen free-tier token exhaustion the user is told to wait ~20 minutes instead of switching models |
 
 ### Trade-off
-
 This is a practical, lightweight verification approach suitable for free-tier API usage. It is not a formal provenance checker — some derived numbers may pass the heuristic critic without a strict citation chain.
 
 ---
@@ -149,14 +150,14 @@ This is a practical, lightweight verification approach suitable for free-tier AP
 
 A dedicated evaluation suite lives in `eval/` and runs 12 benchmark questions through the live agent.
 
-### Running the evaluation
+**All evaluation runs were performed exclusively with Qwen (`qwen/qwen3.6-27b`)** so that reported accuracy reflects the best-performing model. When Qwen was temporarily unavailable due to free-tier limits, tests were paused rather than falling back to OpenAI models (which produced inferior results).
 
+### Running the evaluation
 ```bash
 python eval/run_eval.py
 ```
 
 This will:
-
 1. Load questions from `eval/questions.json`.
 2. Send each question through `run_agent()`.
 3. Score each answer using rules in `eval/scoring.py`.
@@ -210,7 +211,6 @@ This will:
 | 12 | Reasoning | multi-step | Pass | multi-step pass | 1 | 34.5s |
 
 **Failed questions analysis:**
-
 - **Q6** (risk level for customer 0376-YMCJC): The agent called the prediction tool but the keyword check for "medium" in the answer did not match — likely the agent described the result in prose without using the exact risk-level word.
 - **Q7** (top 3 customers by ID): The agent returned a descriptive list but the regex-based list checker did not detect 3 distinct customer IDs in the answer text.
 - **Q10** (customers with tenure ≤ 12): The agent used `execute_code` instead of `aggregate_segment_risk` and the answer included a different aggregation scope.
@@ -218,14 +218,13 @@ This will:
 These are scoring-rigidity failures more than agent-logic failures — the agent produced substantively correct information but in a format the automated scorer could not match.
 
 ### Evaluation file structure
-
 ```
 eval/
-├── questions.json    # 12 benchmark questions with type/expected values
-├── run_eval.py       # Evaluation runner (imports run_agent directly)
-├── scoring.py        # Scoring functions: numeric, category, list, hallucination
-├── report.md         # Generated report after each eval run
-└── eval_set.json     # Legacy eval set (retained for reference)
+├── questions.json      # 12 benchmark questions with type/expected values
+├── run_eval.py         # Evaluation runner (imports run_agent directly)
+├── scoring.py          # Scoring functions: numeric, category, list, hallucination
+├── report.md           # Generated report after each eval run
+└── eval_set.json       # Legacy eval set (retained for reference)
 ```
 
 ---
@@ -233,39 +232,39 @@ eval/
 ## 7. Repository Structure
 
 ```
-notebooks/
-├── app.py                          # Streamlit chat interface
-├── retrain_model.py                # Model retraining script
-├── requirements.txt                # Python dependencies
-├── Dockerfile                      # Container image definition
-├── docker-compose.yml              # Docker Compose with GROQ_API_KEY wiring
-├── .env.example                    # Environment variable template
+.
+├── app.py                  # Streamlit chat interface
+├── retrain_model.py        # Model retraining script
+├── requirements.txt        # Python dependencies
+├── Dockerfile              # Container image definition
+├── docker-compose.yml      # Docker Compose with GROQ_API_KEY wiring
+├── .env.example            # Environment variable template
 ├── .gitignore
 │
 ├── data/
-│   └── Customer-Churn.csv          # Source dataset (7,032 customers)
+│   └── Customer-Churn.csv  # Source dataset (7,032 customers)
 │
 ├── models/
-│   ├── churn_decision_tree.pkl     # Trained model
-│   ├── churn_threshold.pkl         # Classification threshold (0.35)
-│   └── model_features.pkl          # Feature order for inference
+│   ├── churn_decision_tree.pkl   # Trained model
+│   ├── churn_threshold.pkl       # Classification threshold (0.35)
+│   └── model_features.pkl        # Feature order for inference
 │
 ├── notebooks/
-│   └── churn-analysis.ipynb        # Stage 1: EDA, training, evaluation
+│   └── churn-analysis.ipynb      # Stage 1: EDA, training, evaluation
 │
 ├── src/
 │   ├── __init__.py
-│   ├── data.py                     # Data loading, cleaning, EDA, charts
-│   ├── model.py                    # Model loading, preprocessing, prediction
-│   ├── tools.py                    # Tool registry for the agent
-│   └── agent.py                    # Agent loop, critic, LLM orchestration
+│   ├── data.py             # Data loading, cleaning, EDA, charts
+│   ├── model.py            # Model loading, preprocessing, prediction
+│   ├── tools.py            # Tool registry for the agent
+│   └── agent.py            # Agent loop, critic, LLM orchestration
 │
 └── eval/
-    ├── questions.json              # 12 benchmark questions
-    ├── scoring.py                  # Scoring and hallucination detection
-    ├── run_eval.py                 # Evaluation runner
-    ├── report.md                   # Generated evaluation report
-    └── eval_set.json               # Legacy eval set
+    ├── questions.json      # 12 benchmark questions
+    ├── scoring.py          # Scoring and hallucination detection
+    ├── run_eval.py         # Evaluation runner
+    ├── report.md           # Generated evaluation report
+    └── eval_set.json       # Legacy eval set
 ```
 
 ---
@@ -275,13 +274,11 @@ notebooks/
 **Dockerfile** and **docker-compose.yml** are provided.
 
 Run locally:
-
 ```bash
 streamlit run app.py
 ```
 
 Run via Docker:
-
 ```bash
 docker compose up --build
 ```
@@ -319,24 +316,24 @@ The compose file wires `GROQ_API_KEY` from the `.env` file into the container.
 ## 10. Reflection
 
 ### What was hardest
-
 Balancing agent flexibility with factual reliability. Free-tier LLMs vary in tool-calling reliability — some attempts to call tools produce malformed JSON, requiring the regex fallback parser. The loop had to support both structured and freeform responses while still grounding every number in a tool result.
+
+Qwen consistently outperformed the OpenAI-compatible models available on the same free tier. Falling back to those models degraded answer quality, so the final design deliberately keeps Qwen as the sole production model and surfaces a wait message on rate-limit errors instead of switching.
 
 The critic agent was also non-trivial: it needed to distinguish between "number not in tool output but correctly derived" (acceptable) and "number fabricated entirely" (hallucination). The heuristic approach (flag numbers >5 not found in tool outputs) catches most cases but has false positives on derived ratios.
 
 ### What I learned
-
 - Good agent behavior comes from orchestration and prompt engineering together — prompt alone is insufficient.
 - Threshold tuning on the model side had more business impact than switching algorithms.
 - Restricting code execution context (safe builtins, no filesystem access) is essential when exposing "execute code" as a tool.
 - Evaluation is the hardest part to get right — automated scoring of natural-language answers is inherently lossy.
+- Staying on the strongest model (even with temporary rate-limit pauses) yields more trustworthy evaluation numbers than silent fallback to weaker models.
 
 ### What I would improve with more time
-
 - Add strict numeric citation provenance (trace each number in the answer back to the exact tool call that produced it).
 - Expand the eval set to 25+ questions with human-graded gold answers.
 - Add conversation memory persistence across Streamlit sessions.
-- Add retry logic with exponential backoff for Groq rate limits.
+- Add retry logic with exponential backoff / explicit “wait ~20 min” handling for Groq rate limits (already partially implemented via user messaging).
 
 ---
 
@@ -359,7 +356,6 @@ Approximate time allocation (target 8–10 hours):
 ## 12. AI Tool Usage Disclosure
 
 AI tools were used to accelerate implementation and documentation, including:
-
 - Code structure suggestions and scaffolding
 - Bug-fix support during agent loop integration
 - Prompt and system-message refinement for the critic agent
@@ -372,12 +368,10 @@ All final code decisions, testing, and integration were reviewed and validated m
 ## 13. Quick Start
 
 ### Prerequisites
-
 - Python 3.11+
 - A valid Groq API key (free tier works)
 
 ### Setup
-
 ```bash
 # 1. Install dependencies
 pip install -r requirements.txt
@@ -391,19 +385,14 @@ streamlit run app.py
 ```
 
 ### Run evaluation
-
 ```bash
 python eval/run_eval.py
 ```
-
 Report is written to `eval/report.md`.
 
-### Retrain model (optional)
+**Note:** Evaluation assumes Qwen is available. If the free-tier token limit has been reached, wait ~20 minutes for the quota to reset before re-running.
 
+### Retrain model (optional)
 ```bash
 python retrain_model.py
 ```
-
----
-
-This README reflects the current state of the project against the Adept Tech Solutions assessment requirements as of August 2026.
