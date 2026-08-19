@@ -209,7 +209,6 @@ Run options:
 
 - [x] A second critic agent checks analyst answers and can reject or revise responses.
 - [x] Multi-turn memory for follow-up questions.
-- [ ] Auto-generated charts as part of the answer.
 - [x] A small eval set with a report on accuracy and hallucination rate.
 - [x] Deploying the app somewhere reachable.
 - [x] Ngrok reverse proxy access.

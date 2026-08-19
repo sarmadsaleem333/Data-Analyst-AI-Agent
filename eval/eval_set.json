@@ -1,0 +1,62 @@
+[
+  {
+    "id": "Q1",
+    "question": "What is the overall churn rate in this dataset?",
+    "expected_keywords": ["churn", "rate", "%"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q2",
+    "question": "Which contract type has the highest churn rate?",
+    "expected_keywords": ["contract", "month-to-month", "churn"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q3",
+    "question": "Does churn correlate with tenure or monthly charges?",
+    "expected_keywords": ["tenure", "monthlycharges", "correlation"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q4",
+    "question": "Predict risk for customer 0376-YMCJC.",
+    "expected_keywords": ["risk", "prediction", "customer"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q5",
+    "question": "For month-to-month customers, what is the aggregate predicted churn risk?",
+    "expected_keywords": ["segment", "churn", "risk"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q6",
+    "question": "What are the top 5 customers most likely to churn?",
+    "expected_keywords": ["top", "customer", "churn"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q7",
+    "question": "Predict churn risk for a hypothetical customer: Female, tenure 3, Month-to-month, Fiber optic, Electronic check, MonthlyCharges 89, TotalCharges 267.",
+    "expected_keywords": ["hypothetical", "risk", "churn"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q8",
+    "question": "What is the churn rate by payment method?",
+    "expected_keywords": ["payment", "method", "churn"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q9",
+    "question": "How many customers are predicted high risk when tenure is less than or equal to 12 months?",
+    "expected_keywords": ["high", "risk", "tenure"],
+    "min_tool_calls": 1
+  },
+  {
+    "id": "Q10",
+    "question": "What is the average predicted risk score for customers using fiber optic internet?",
+    "expected_keywords": ["average", "risk", "fiber"],
+    "min_tool_calls": 1
+  }
+]
