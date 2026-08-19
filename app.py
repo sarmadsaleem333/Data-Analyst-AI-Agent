@@ -33,14 +33,11 @@ with st.sidebar:
     - Hypothetical customer scenarios
     - Segment-level churn analysis
     - Correlations and trends
-    - Request charts and visualizations
 
     **Example questions:**
     - "Which customers are most likely to churn?"
     - "Does churn risk correlate with contract type?"
-    - "Show me a chart of churn rate by contract type"
     - "Predict risk for customer 0376-YMCJC"
-    - "Show me a histogram of monthly charges for churned vs stayed customers"
     - "Now break that down by internet service type"
     """)
 

@@ -193,24 +193,26 @@ Run options:
 - Local: `streamlit run app.py`
 - Docker: `docker compose up --build`
 
-## 9) What Is Done vs Pending (Assessment Checklist)
+## 9) Assessment Checklist Status
 
-### Done
+### What "Done" Looks Like (Must Complete)
 
-- Notebook with EDA + model training/evaluation workflow.
-- Trained model and callable inference functions.
-- Working Streamlit app wired to model and agent.
-- Agent with multi-step tool use and computation tools.
-- Modular project structure.
-- Dockerization.
+- [x] A notebook with trained model and documented data-cleaning decisions and a justified metric choice.
+- [x] A working Streamlit chat app, wired live to the model and agent.
+- [x] An agent that plans multi-step, computes real answers (not just LLM guesses), and self-checks before responding.
+- [x] Modular, organized code (not one giant file).
+- [x] A short written reflection.
+- [x] Git etiquette (meaningful, incremental commits) for the project.
+- [x] Dockerization.
 
-### In progress / to finalize for submission
+### Stretch Goals (Optional)
 
-- Final README refinement (this file can still be tightened before submission).
-- Short reflection section (half-page max).
-- Honest time-spent breakdown section.
-- Public repo URL + hosted app URL for final submission package.
-- Optional: stronger hard guarantees for numeric grounding in final answers.
+- [x] A second critic agent checks analyst answers and can reject or revise responses.
+- [x] Multi-turn memory for follow-up questions.
+- [ ] Auto-generated charts as part of the answer.
+- [x] A small eval set with a report on accuracy and hallucination rate.
+- [x] Deploying the app somewhere reachable.
+- [x] Ngrok reverse proxy access.
 
 ## 10) Reflection (Draft)
 
